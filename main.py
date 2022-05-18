@@ -9,8 +9,10 @@ from random import random
 import clip
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchvision.datasets
 import torchvision.transforms as transforms
+from tqdm import tqdm
 
 from classifiers import zeroshot_classifier
 
@@ -110,6 +112,65 @@ def main():
     print('Start obtaining text features')
     zeroshot_weights = zeroshot_classifier(classes, templates, model)
     print('finish getting text features. start getting image features')
+
+    print('Start saving training image features')
+
+    if not load_train:
+
+        train_images_targets = []
+        train_images_features_agg = []
+
+        with torch.no_grad():
+            for augment_idx in range(args.augment_epoch):
+                train_images_features = []
+
+                print(f"Augment time: {augment_idx} / {args.augment_epoch}")
+                for i, (images, targets) in enumerate(tqdm(train_loader)):
+                    images = images.cuda()
+                    images_features = model.encode_image(images)
+                    train_images_features.append(images_features)
+
+                    if augment_idx == 0:
+                        target = target.cuda()
+                        train_images_targets.append(target)
+
+                images_features_cat = torch.cat(train_images_features, dim=0).unsqueeze(0)
+                train_images_features_agg.append(images_features_cat)
+
+        train_images_features_agg = torch.cat(train_images_features_agg, dim=0).mean(0)
+        train_images_features_agg /= train_images_features_agg.norm(dim=-1, keepdim=True)
+        train_images_features_agg = train_images_features_agg.permute(1, 0)
+
+        train_images_targets = F.one_hot(torch.cat(train_images_targets, dim=0)).half()
+        torch.save(train_images_features_agg, train_features_path)
+        torch.save(train_images_targets, train_targets_path)
+
+    else:
+        train_images_features_agg = torch.load(train_features_path)
+        train_images_targets = torch.load(train_targets_path)
+
+    print("Start saving testing features")
+
+    if not load_test:
+        test_features =[]
+        test_labels=[]
+        with torch.no_grad():
+            for i, (images, target) in enumerate(tqdm(loader)):
+                images = images.cuda()
+                target = target.cuda()
+                image_features = model.encode_image(images)
+                image_features /= image_features.norm(dim=-1, keepdim=True)
+                test_features.append(image_features)
+                test_labels.append(target)
+        test_features = torch.cat(test_features)
+        test_labels = torch.cat(test_labels)
+
+        torch.save(test_features, test_features_path)
+        torch.save(test_labels, test_targets_path)
+
+    else:
+        test_features = torch.load(test_features_path)
+        test_labels = torch.load(test_targets_path)
 
 if __name__ == '__main__':
     main()
